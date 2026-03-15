@@ -1,3 +1,7 @@
+# This script compares pairs of known twin films, with summaries taken from the CMU dataset
+# and calculates the similarity scores using cosine similarity.
+# Might have errors on first run, but just run it again and it should display + save results
+
 import os
 import datetime
 import torch
@@ -5,25 +9,29 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModel
 
-# personally using a M3 mac to run this project but kept facing errors, so switched from cpu to mps
+# personally using a M3 mac (Apple Silicon) to run this project but kept facing errors, so switched from cpu to mps
+# can revert to cpu if mps doesn't work
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 print("Using device:", device)
 
+# disable gradient tracking to reduce memory usage and speed up overall process
 torch.set_grad_enabled(False)
 
-# load model on mps in float16 
+# load model and tokenizer for ModernBERT
 model_id = "answerdotai/ModernBERT-base"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 
+# load model on mps in float16 (worked best for ModernBERT)
 model = AutoModel.from_pretrained(
     model_id,
     dtype=torch.float16
 ).to(device)
 
-# Warm-up pass (MPS compiles kernels here)
+# compiles kernels for a "warm-up pass" to test model on this device
+# mainly needed for mps because ModernBERT has issues running on Apple Silicon
 _ = model(**tokenizer("warmup", return_tensors="pt").to(device))
 
-# collection of twin movies
+# collection of twin movies and their respective IDs and summaries
 twin_movies = {
     "206845": {
         "title": "Antz (1998)",
@@ -92,10 +100,9 @@ pairs_to_compare = [
     ("1031573", "1332050"),     # Chasing Liberty vs First Daughter
     ("9732060", "2809621"),     # The Illusionist vs The Prestige
     ("36019569", "33641119"),   # Snow White and the Huntsman vs Mirror Mirror 
-    
 ]
 
-# mean pooling
+# mean pooling for sentence embeddings
 def mean_pool(last_hidden_state, attention_mask):
     mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size())
     summed = (last_hidden_state * mask).sum(dim=1)
@@ -106,46 +113,54 @@ def mean_pool(last_hidden_state, attention_mask):
 similarities = []
 
 for id1, id2 in pairs_to_compare:
+    # extract movie id from collection above
     movie1 = twin_movies[id1]
     movie2 = twin_movies[id2]
 
+    # extract movie title from collection above
     title1 = movie1["title"]
     title2 = movie2["title"]
 
+    # extract movie synopsis from collection above
     text1 = movie1["synopsis"]
     text2 = movie2["synopsis"]
 
+    # print out titles of movies being compared
     print(f"{title1} vs {title2}")
 
-    # Tokenize
+    # tokenize selected summaries (reduced max_length for speed)
     inputs1 = tokenizer(text1, return_tensors="pt", truncation=True, max_length=256)
     inputs2 = tokenizer(text2, return_tensors="pt", truncation=True, max_length=256)
 
+    # move tensors to mps or cpu device
     inputs1 = {k: v.to(device) for k, v in inputs1.items()}
     inputs2 = {k: v.to(device) for k, v in inputs2.items()}
 
-    # Forward pass
+    # forward pass through ModernBERT model
     out1 = model(**inputs1)
     out2 = model(**inputs2)
 
-    # Mean pooling
+    # mean pooling to convert token embeddings to sentence embeddings
     emb1 = mean_pool(out1.last_hidden_state, inputs1["attention_mask"])
     emb2 = mean_pool(out2.last_hidden_state, inputs2["attention_mask"])
 
-    # Normalize
+    # normalise embeddings to their unit lengths
+    # this is needed for cosine similarity because it calculates the angle between the two vectors
     emb1 = F.normalize(emb1, p=2, dim=1)
     emb2 = F.normalize(emb2, p=2, dim=1)
 
-    # Cosine similarity
+    # use cosine similarity to calculate the similarity scores
     sim = F.cosine_similarity(emb1, emb2).item()
     similarities.append((id1, id2, sim))
 
+    # print out similarity score of the pair of twin films being compared
     print(f"Similarity Score: {sim:.4f}")
 
-# save notch boxplot results
+# save similarity score results as a notched box plot
 # kept facing errors when results displayed in a popup, so i switched to saving them to a folder instead
 os.makedirs("../results/modernbert", exist_ok=True)
 
+# information for notched box plot
 plt.figure(figsize=(8, 6))
 # extracts the similarity score of each pair
 plt.boxplot([score for (_, _, score) in similarities], notch=True, patch_artist=True,
@@ -156,5 +171,6 @@ plt.grid(axis="y", linestyle="--", alpha=0.6)
 
 # save results with unique timestamp so they'll save separately instead of overwriting previous images
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+# if running on own device, will have to edit line below to save in a specific folder on your device
 plt.savefig(f"/Users/shanwhite/Desktop/fyp/twin-movies-v3.10/ModernBERT/results/twin_similarity_scores_{timestamp}.png", dpi=300)
 plt.close()
