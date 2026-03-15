@@ -6,17 +6,13 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModel
 
-# ---------------------------------------------------
-# DEVICE: Use MPS on M1/M2/M3 Macs
-# ---------------------------------------------------
+# personally using a M3 mac to run this project but kept facing errors, so switched from cpu to mps
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 print("Using device:", device)
 
 torch.set_grad_enabled(False)
 
-# ---------------------------------------------------
-# LOAD MODEL ON MPS IN FLOAT16 (Transformers 5.x uses dtype=)
-# ---------------------------------------------------
+# load model on mps in float16 
 model_id = "answerdotai/ModernBERT-base"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -28,9 +24,7 @@ model = AutoModel.from_pretrained(
 # Warm-up pass (MPS compiles kernels here)
 _ = model(**tokenizer("warmup", return_tensors="pt").to(device))
 
-# ---------------------------------------------------
-# LOAD MOVIE SUMMARIES
-# ---------------------------------------------------
+# load movie summaries from cmu dataset
 def load_summaries(path):
     data = []
     with open(path, "r", encoding="utf-8") as f:
@@ -44,31 +38,29 @@ def load_summaries(path):
 
 movies = load_summaries("cmu_data/plot_summaries.txt")
 
-# ---------------------------------------------------
-# MEAN POOLING
-# ---------------------------------------------------
+# mean pooling
 def mean_pool(last_hidden_state, attention_mask):
     mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size())
     summed = (last_hidden_state * mask).sum(dim=1)
     counts = mask.sum(dim=1)
     return summed / counts
 
-# ---------------------------------------------------
-# COMPUTE SIMILARITIES
-# ---------------------------------------------------
+# compute similarities of N pairs of movies 
 N = 20
 similarities = []
 
 for _ in range(N):
+    # calculate similarity score
     (movie_id1, text1), (movie_id2, text2) = random.sample(movies, 2)
 
+    # print out movie IDs and summaries of each pair
     print(f"\nMovie 1 ID: {movie_id1}")
     print(f"Movie 1 Summary: {text1}\n")
 
     print(f"Movie 2 ID: {movie_id2}")
     print(f"Movie 2 Summary: {text2}\n")
 
-    # Tokenize (reduced max_length for speed)
+    # tokenize (reduced max_length for speed)
     inputs1 = tokenizer(text1, return_tensors="pt", truncation=True, max_length=256)
     inputs2 = tokenizer(text2, return_tensors="pt", truncation=True, max_length=256)
 
@@ -89,9 +81,8 @@ for _ in range(N):
 
 print(f"\nLast similarity score: {similarities[-1]:.4f}")
 
-# ---------------------------------------------------
-# SAVE BOXPLOT
-# ---------------------------------------------------
+# save notch boxplot results
+# kept facing errors when results displayed in a popup, so i switched to saving them to a folder instead
 os.makedirs("../results/modernbert", exist_ok=True)
 
 plt.figure(figsize=(8, 6))
@@ -101,6 +92,7 @@ plt.title("Similarity Scores Between Random Movie Pairs (ModernBERT)")
 plt.ylabel("Cosine Similarity")
 plt.grid(axis="y", linestyle="--", alpha=0.6)
 
+# save results with unique timestamp so they'll save separately instead of overwriting previous images
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 plt.savefig(f"/Users/shanwhite/Desktop/fyp/twin-movies-v3.10/ModernBERT/results/random_similarity_scores_{timestamp}.png", dpi=300)
 plt.close()
